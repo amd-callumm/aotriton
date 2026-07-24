@@ -26,7 +26,6 @@ def create_select_stmt(table_name, wheres):
             where_stmt.append(f'{k} = ?')
             params.append(v.sql_value if isinstance(v, TC.TypedChoice) else v)
     stmt += ' AND '.join(where_stmt)
-    # print('create_select_stmt', stmt)
     return stmt, params
 
 def format_sql(stmt, params):
@@ -52,33 +51,67 @@ class Factory(object):
                 assert False, f'{fn} is not a file, {path}'
 
     def create_view(self, functional):
+        """Query tuning database with N-tier GPU prioritization.
+
+        For each target GPU, iterates its priority chain and returns the first
+        match. Results are tagged with target_gpu for kdesc.py to filter per-GPU
+        LUT slices. Falls back to fallback_choices if compact_choices yields nothing.
+        """
         log(lambda : f'{functional=}')
         meta = functional.meta_object
         pfx = 'op.' if getattr(meta, 'CODEGEN_MODULE', None) == 'op' else ''
         table_name = pfx + meta.FAMILY.upper() + '$' + meta.NAME
-        # TODO: Incremental changes:
-        # 1. load database_gpus first
-        # 2. then override entries with optimized_for gpus
+
+        # Get GPU priority chains for each target GPU
+        # For multi-mod: {'gfx1151_mod0': [...], 'gfx1151_mod1': [...]}
+        # For multi-arch: {'gfx1151_mod0': [...], 'gfx1150_mod0': [...]}
+        target_priority_map = functional.database_gpus
+
         def build_sql(choice_dict):
-            wheres = {
-                'gpu' : functional.database_gpus,
-            }
-            for key, value in choice_dict.items():
-                if isinstance(value, TC.TypedChoice) and value.is_tensor:
-                    wheres[f'inputs${key}_dtype'] = value
-                else:
-                    wheres[f'inputs${key}'] = value
-            return create_select_stmt(table_name, wheres)
-        stmt, params = build_sql(functional.compact_choices)
-        try:
-            log(lambda : f'select stmt: {stmt} params {params}')
-            df = pd.read_sql_query(stmt, self._conn, params=params)
-            if not df.empty:
-                return df, format_sql(stmt, params)
-            # Downgrade
-            stmt, params = build_sql(functional.fallback_choices)
-            df = pd.read_sql_query(stmt, self._conn, params=params)
-            return df, format_sql(stmt, params)
-        except pd.errors.DatabaseError:
-            log(lambda : f'Table {table_name} may not exist. select stmt: {stmt} params {params}')
-            return None, format_sql(stmt, params)
+            """Query each target GPU's priority chain, return combined results.
+
+            Returns (dataframe, sql) where dataframe has target_gpu column.
+            """
+            all_dfs = []
+            last_sql = None
+
+            for target_gpu, priority_chain in target_priority_map.items():
+                # Try each GPU in this target's priority chain
+                for db_gpu in priority_chain:
+                    # Build WHERE clause for this GPU and configuration
+                    wheres = {'gpu': db_gpu}
+                    for key, value in choice_dict.items():
+                        if isinstance(value, TC.TypedChoice) and value.is_tensor:
+                            wheres[f'inputs${key}_dtype'] = value
+                        else:
+                            wheres[f'inputs${key}'] = value
+
+                    stmt, params = create_select_stmt(table_name, wheres)
+                    try:
+                        log(lambda : f'Trying {db_gpu} for target {target_gpu}: {stmt}')
+                        df = pd.read_sql_query(stmt, self._conn, params=params)
+                        if not df.empty:
+                            # Tag rows with target GPU for kdesc.py filtering
+                            df['target_gpu'] = target_gpu
+                            all_dfs.append(df)
+                            last_sql = format_sql(stmt, params)
+                            log(lambda : f'Found {len(df)} rows in {db_gpu} for {target_gpu}')
+                            break  # Found match for this target, move to next target
+                    except pd.errors.DatabaseError:
+                        log(lambda : f'Table {table_name} may not exist')
+                        return None, format_sql(stmt, params)
+
+            if all_dfs:
+                return pd.concat(all_dfs, ignore_index=True), last_sql
+            return pd.DataFrame(), None
+
+        # Try exact match first (compact_choices)
+        df, sql = build_sql(functional.compact_choices)
+        if df is None:
+            # Database error
+            return df, sql
+        if not df.empty:
+            return df, sql
+
+        # No exact match - try fallback_choices (e.g., PADDED_HEAD=False substitution)
+        return build_sql(functional.fallback_choices)

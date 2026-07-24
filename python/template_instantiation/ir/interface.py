@@ -72,6 +72,10 @@ class Interface(ABC):
     def unique_path(self) -> Path:
         return Path(self.FAMILY) / self.CODEGEN_MODULE / self.NAME
 
+    @property
+    def UNTYPED_FULL_NAME(self):
+        return f'{self.FAMILY}.{self.NAME}'
+
     # --- tuning fallback (operator-level partial tune; default identity) ---
 
     @property
