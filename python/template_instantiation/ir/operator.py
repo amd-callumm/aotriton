@@ -159,12 +159,12 @@ class Operator(Interface):
             def discretization(v, bucket=bucket):
                 return bucket.index(v)
             df[f'$$ind_{i}'] = df[ind_key].apply(discretization)
-        for i, gpu in enumerate(f.database_gpus):
+        for i, gpu in enumerate(f.optimized_for):
             if i > 0:
                 lut_tensor[i] = lut_tensor[0]
-            df_i = df[df['gpu'] == gpu]
-            inds = tuple([df_i[f'$$ind_{j}'] for j in range(nkeys)])
-            lut_tensor[i][inds] = df_i[backend_key]
+            # Don't filter by GPU - dataframe contains 0-1 rows from whichever GPU matched
+            inds = tuple([df[f'$$ind_{j}'] for j in range(nkeys)])
+            lut_tensor[i][inds] = df[backend_key]
         backend_inds = np.unique(lut_tensor).tolist()
         return lut_tensor, [self._backends[ind].enum_name for ind in backend_inds], binning_dict
 

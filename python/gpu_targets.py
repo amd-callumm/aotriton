@@ -22,18 +22,20 @@ AOTRITON_SUPPORTED_GPUS = (
     'gfx1250_mod0',
 )
 
-# TODO: AOTRITON_TUNING_DATABASE_REUSE -> AOTRITON_TUNING_DATABASE_FALLBACK
-# Load fallback entries first, and override with "patching" entries from real GPU
+# GPU priority chains for N-tier partial database support.
+# Keys are GPU names (with _mod0 suffix) to match functional._optimized_for.
+# Values are priority-ordered lists of GPU database names to query.
+# First matching database entry wins for each LUT cell.
 AOTRITON_TUNING_DATABASE_REUSE = {
-    'gfx1101_mod0' : 'gfx1100_mod0',
-    'gfx1102_mod0' : 'gfx1100_mod0',
-    'gfx1103_mod0' : 'gfx1100_mod0',
-    'gfx1200_mod0' : 'gfx1201_mod0',
-    'gfx1150_mod0' : 'gfx1100_mod0',
-    'gfx1151_mod0' : 'gfx1100_mod0',
-    'gfx1152_mod0' : 'gfx1100_mod0',
-    'gfx1153_mod0' : 'gfx1100_mod0',
-    'gfx1250_mod0' : 'gfx942_mod0',
+    'gfx1101_mod0': ['gfx1101_mod0', 'gfx1100_mod0'],
+    'gfx1102_mod0': ['gfx1102_mod0', 'gfx1100_mod0'],
+    'gfx1103_mod0': ['gfx1103_mod0', 'gfx1100_mod0'],
+    'gfx1200_mod0': ['gfx1200_mod0', 'gfx1201_mod0'],
+    'gfx1150_mod0': ['gfx1150_mod0', 'gfx1100_mod0'],
+    'gfx1151_mod0': ['gfx1151_mod0', 'gfx1100_mod0'],
+    'gfx1152_mod0': ['gfx1152_mod0', 'gfx1100_mod0'],
+    'gfx1153_mod0': ['gfx1153_mod0', 'gfx1100_mod0'],
+    'gfx1250_mod0': ['gfx1250_mod0', 'gfx942_mod0'],
 }
 
 AOTRITON_ARCH_TO_PACK = {

@@ -198,12 +198,12 @@ class KernelDescription(Interface):
             def discretization(v, bucket=bucket):
                 return bucket.index(v)
             df[f'$$ind_{i}'] = df[ind_key].apply(discretization)
-        for i, gpu in enumerate(f.database_gpus):
+        for i, gpu in enumerate(f.optimized_for):
             if i > 0:
                 lut_tensor[i] = lut_tensor[0]
-            df_i = df[df['gpu'] == gpu]
-            inds = tuple([df_i[f'$$ind_{j}'] for j in range(nkeys)])
-            lut_tensor[i][inds] = df_i['$$sig_num']
+            # Don't filter by GPU - dataframe contains 0-1 rows from whichever GPU matched
+            inds = tuple([df[f'$$ind_{j}'] for j in range(nkeys)])
+            lut_tensor[i][inds] = df['$$sig_num']
         # Downcast the LUT dtype (int8 usually suffices).
         nsigs = len(sigs)
         for dtype in [np.int8, np.int16, np.int32]:

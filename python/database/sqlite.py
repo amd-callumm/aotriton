@@ -52,33 +52,65 @@ class Factory(object):
                 assert False, f'{fn} is not a file, {path}'
 
     def create_view(self, functional):
+        """Query tuning database with N-tier GPU prioritization.
+
+        Implements two-stage selection strategy:
+        1. Try compact_choices (exact shape) across GPU priority chain
+        2. If no exact match found, try fallback_choices (similar shape)
+
+        For each stage, tries GPUs in priority order defined by
+        AOTRITON_TUNING_DATABASE_REUSE configuration.
+        """
         log(lambda : f'{functional=}')
         meta = functional.meta_object
         pfx = 'op.' if getattr(meta, 'CODEGEN_MODULE', None) == 'op' else ''
         table_name = pfx + meta.FAMILY.upper() + '$' + meta.NAME
-        # TODO: Incremental changes:
-        # 1. load database_gpus first
-        # 2. then override entries with optimized_for gpus
+
+        # Get GPU priority chains for each target GPU
+        # Currently single-mod per arch, so dict has one entry per Functional
+        target_priority_map = functional.database_gpus
+        # For single-mod case, just use the one priority chain
+        _, priority_chain = next(iter(target_priority_map.items()))
+
         def build_sql(choice_dict):
-            wheres = {
-                'gpu' : functional.database_gpus,
-            }
-            for key, value in choice_dict.items():
-                if isinstance(value, TC.TypedChoice) and value.is_tensor:
-                    wheres[f'inputs${key}_dtype'] = value
-                else:
-                    wheres[f'inputs${key}'] = value
-            return create_select_stmt(table_name, wheres)
-        stmt, params = build_sql(functional.compact_choices)
-        try:
-            log(lambda : f'select stmt: {stmt} params {params}')
-            df = pd.read_sql_query(stmt, self._conn, params=params)
-            if not df.empty:
-                return df, format_sql(stmt, params)
-            # Downgrade
-            stmt, params = build_sql(functional.fallback_choices)
-            df = pd.read_sql_query(stmt, self._conn, params=params)
-            return df, format_sql(stmt, params)
-        except pd.errors.DatabaseError:
-            log(lambda : f'Table {table_name} may not exist. select stmt: {stmt} params {params}')
-            return None, format_sql(stmt, params)
+            """Try each GPU in priority chain with given choice configuration.
+
+            Returns (dataframe, sql) on first match, or (dataframe, None) if not found.
+            """
+
+            for gpu in priority_chain:
+                # Build WHERE clause for this GPU and configuration
+                wheres = {'gpu': gpu}
+                for key, value in choice_dict.items():
+                    if isinstance(value, TC.TypedChoice) and value.is_tensor:
+                        wheres[f'inputs${key}_dtype'] = value
+                    else:
+                        wheres[f'inputs${key}'] = value
+
+                # Query this GPU's database
+                stmt, params = create_select_stmt(table_name, wheres)
+                try:
+                    log(lambda : f'Trying {gpu}: {stmt} params {params}')
+                    df = pd.read_sql_query(stmt, self._conn, params=params)
+                    if not df.empty:
+                        log(lambda : f'Found tuning in {gpu}')
+                        return df, format_sql(stmt, params)
+                except pd.errors.DatabaseError:
+                    log(lambda : f'Table {table_name} may not exist. stmt: {stmt} params {params}')
+                    return None, format_sql(stmt, params)
+
+            # No match found
+            return pd.DataFrame(), None
+
+        # Try exact match first (compact_choices)
+        df, sql = build_sql(functional.compact_choices)
+        if df is None:
+            # Database error - return immediately
+            return df, sql
+        if not df.empty:
+            # Found match with exact choices
+            return df, sql
+
+        # No exact match - try fallback_choices (e.g., PADDED_HEAD=False substitution)
+        df, sql = build_sql(functional.fallback_choices)
+        return df, sql
